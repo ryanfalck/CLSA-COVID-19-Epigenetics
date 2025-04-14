@@ -1,0 +1,1275 @@
+---
+title: "CLSA COVID-19 Epigenetic Analysis"
+author: "Ryan Stanley Falck"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Step 1: Data Management
+
+```{r}
+#Load variables and packages
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse,Hmisc, knitr, pander, broom, haven, rms, nlme,lspline, lavaan, lme4, semTools, tableone, psych, ggpubr, ggplot2, openxlsx, expss, effects, car,
+               BiocManager, minfi, IlluminaHumanMethylationEPICmanifest, IlluminaHumanMethylationEPICanno.ilm10b4.hg19, remotes, ewastools)
+setwd("~/Desktop/UBC-Postdoctoral Fellowship/CLSA - Covid Analyses")
+COVID<-read.xlsx("CLSA_COVID_CKB_v2.xlsx")#Processed Baseline + Follow-up 1 + COVID Questionnaire
+
+#Check epigenetic variables
+describe(COVID$DNAmAge_COM_0)
+describe(COVID$Hannum_Age_COM_0)
+describe(COVID$AgeAccelerationDifference_COM_0)
+describe(COVID$AgeAccelerationResidual_COM_0)
+
+#Exclude people without Epigenetic data
+COVID.1<-subset(COVID, DNAmAge_COM_0>=0) #879 participants with Epigenetic data in Comprehensive Cohort who also completed COVID-19 Questionnaire Study
+
+# Excluded individuals with dementia, subjective cognitive impairment,
+# anxiety, depression, or mood disorders
+
+COVID.Final <- subset(COVID.1, Dementia_0 == "No" & SCI_0 == "No" & Anxiety_0 == "No" &
+                        Clin_Depression_0 == "No" & Mood_Disord_0 == "No") # 663 participants included in the study
+
+
+```
+
+# Step 2: Baseline Characteristics
+```{r}
+BL_vars<-dput(names(COVID.Final[c(7,6,9,10,8,11,12,13,34,35,36,42,2:5)]))
+
+Table1_continuous<-CreateTableOne(vars=BL_vars, data=COVID.Final)
+print(Table1_continuous,contDigits=2,missing=TRUE,quote=TRUE)
+```
+
+# Step 3: Check correlations between epidemiological age and chronological age
+
+Pearson Correlations
+```{r}
+cor.test(COVID.Final$Age, COVID.Final$DNAmAge_COM_0) #DNA Methylation Age
+cor.test(COVID.Final$Age, COVID.Final$Hannum_Age_COM_0) #Hannum Age
+cor.test(COVID.Final$Age, COVID.Final$AgeAccelerationDifference_COM_0) #Age Acceleration Difference
+cor.test(COVID.Final$Age, COVID.Final$AgeAccelerationResidual_COM_0) #Residual Age Acceleration Difference
+```
+
+Spearman Correlations
+```{r}
+cor.test(COVID.Final$Age, COVID.Final$DNAmAge_COM_0, method="spearman") #DNA Methylation Age
+cor.test(COVID.Final$Age, COVID.Final$Hannum_Age_COM_0, method="spearman") #Hannum Age
+cor.test(COVID.Final$Age, COVID.Final$AgeAccelerationDifference_COM_0, method="spearman") #Age Acceleration Difference
+cor.test(COVID.Final$Age, COVID.Final$AgeAccelerationResidual_COM_0, method="spearman") #Residual Age Acceleration Difference
+```
+
+# Step 4: Predicting Depressive Symptoms from Epigenetic Age
+
+## 4.1: Linear Mixed Model Set-up
+```{r}
+library(dplyr)
+
+COVID.Final.BL<- COVID.Final[c(1:13,34,35,42,36)]
+COVID.Final.FU1<- COVID.Final[c(1:13,34,35,42,64)]
+COVID.Final.CBL<- COVID.Final[c(1:13,34,35,42,68)]
+COVID.Final.CEX<- COVID.Final[c(1:13,34,35,42,73)]
+
+COVID.Final.BL$time <- 1
+COVID.Final.FU1$time <- 2
+COVID.Final.CBL$time <- 3
+COVID.Final.CEX$time <- 4
+
+COVID.Final.BL<- rename(COVID.Final.BL, c("CESD_10_0" = "CESD_10"))
+COVID.Final.FU1<- rename(COVID.Final.FU1, c("CESD_10_1" = "CESD_10"))
+COVID.Final.CBL<- rename(COVID.Final.CBL, c("CESD_10_Baseline"="CESD_10"))
+COVID.Final.CEX<- rename(COVID.Final.CEX, c("CESD_10_Exit"="CESD_10"))
+
+COVID_Full_Complete<- rbind(COVID.Final.BL,COVID.Final.FU1,COVID.Final.CBL,COVID.Final.CEX)
+
+COVID_Full_Complete$timefactor <- as.factor(COVID_Full_Complete$time)
+```
+
+
+
+## 4.2: DNA Methylation Age
+
+
+### 4.2.1: Crude Model
+```{r}
+DNA_CESD_model_crude<-lmer(CESD_10~DNAmAge_COM_0*timefactor + (1 + time|ID), REML = TRUE, COVID_Full_Complete)
+summary(DNA_CESD_model_crude)
+Anova(DNA_CESD_model_crude, type = "III")#significant DNA methylation x time interaction
+```
+
+
+### 4.2.2: Full Model - Adjusted for age, sex, income, education, living status, alcohol intake, smoking status, physical activity level, chronic conditions, & BMI
+```{r}
+DNA_CESD_model_full<-lmer(CESD_10~DNAmAge_COM_0*timefactor + (1 + time|ID) + Sex + Income_Level + Education4 + Living_Status + 
+                            Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0 + Chronic_conditions_0, COVID_Full_Complete)
+summary(DNA_CESD_model_full)
+Anova(DNA_CESD_model_full, type = "III")#significant  DNA methylation x time interaction
+```
+
+
+### 4.2.3: Simple Slopes Analyses (Contrasts)
+```{r}
+mean(COVID.Final$DNAmAge_COM_0) #Mean DNA Methylation Age = 57.49334
+mean(COVID.Final$DNAmAge_COM_0) + 1*sd(COVID.Final$DNAmAge_COM_0) #High" DNA Methylation Age = 66.20947 
+mean(COVID.Final$DNAmAge_COM_0) - 1*sd(COVID.Final$DNAmAge_COM_0) #"Low" DNA Methylation Age = 48.77721
+
+
+ef1<-effect(term = "DNAmAge_COM_0*timefactor", xlevels=list(DNAmAge_COM_0=c(48.77721,57.49334,66.20947)), mod=DNA_CESD_model_full)
+efdata1<-as.data.frame(ef1)
+efdata2<-efdata1[c(2,3,4,1)]
+
+efdata2$DNA<-NA
+efdata2$DNA[efdata2$DNAmAge_COM_0 == 48.77721] <- "Low"
+efdata2$DNA[efdata2$DNAmAge_COM_0 == 57.49334] <- "Mean"
+efdata2$DNA[efdata2$DNAmAge_COM_0 == 66.20947] <- "High"
+
+efdata2
+#Contrast 1: Differences between High and Low DNA from BL to FU1
+Diff1= efdata2$fit[c(3)] - efdata2$fit[c(6)] 
+Diff2= efdata2$fit[c(1)] - efdata2$fit[c(4)]
+Diff3= Diff1 - Diff2
+se1 = sqrt((efdata2$se[c(3)])^2 + (efdata2$se[c(6)])^2)
+LL1 = Diff1 - 1.96*se1
+UL1 = Diff1 + 1.96*se1
+se2 = sqrt((efdata2$se[c(1)])^2 + (efdata2$se[c(4)])^2)
+LL2 = Diff2 - 1.96*se2
+UL2 = Diff2 + 1.96*se2
+se3 = sqrt(se1^2 + se2^2)
+t1 = Diff3/se3
+n=663
+p=pt(-abs(t1),df=n-1)
+LL3= Diff3 - 1.96*se3
+UL3=  Diff3 + 1.96*se3
+Diff1
+Diff2
+Diff3
+se1
+se2
+se3
+t1
+p
+LL1
+UL1
+LL2
+UL2
+LL3
+UL3
+
+#Contrast 2: Differences between High and Low DNA from FU1 to COVID BL
+Diff1.2= efdata2$fit[c(6)] - efdata2$fit[c(9)] 
+Diff2.2= efdata2$fit[c(4)] - efdata2$fit[c(7)]
+Diff3.2= Diff1.2 - Diff2.2
+se1.2 = sqrt((efdata2$se[c(6)])^2 + (efdata2$se[c(9)])^2)
+se2.2 = sqrt((efdata2$se[c(4)])^2 + (efdata2$se[c(7)])^2)
+se3.2 = sqrt(se1.2^2 + se2.2^2)
+t2 = Diff3.2/se3.2
+p.2=pt(-abs(t2),df=n-1)
+LL1.2= Diff1.2 - 1.96*se1.2
+UL1.2=  Diff1.2 + 1.96*se1.2
+LL2.2= Diff2.2 - 1.96*se2.2
+UL2.2=  Diff2.2 + 1.96*se2.2
+LL3.2= Diff3.2 - 1.96*se3.2
+UL3.2=  Diff3.2 + 1.96*se3.2
+Diff1.2
+Diff2.2
+Diff3.2
+se1.2
+se2.2
+se3.2
+t2
+p.2
+LL1.2
+UL1.2
+LL2.2
+UL2.2
+LL3.2
+UL3.2
+
+#Contrast 3: Differences between High and Low DNA from COVID BL to COVID Exit
+Diff1.3= efdata2$fit[c(9)] - efdata2$fit[c(12)] 
+Diff2.3= efdata2$fit[c(7)] - efdata2$fit[c(10)]
+Diff3.3= Diff1.3 - Diff2.3
+se1.3 = sqrt((efdata2$se[c(6)])^2 + (efdata2$se[c(9)])^2)
+se2.3 = sqrt((efdata2$se[c(4)])^2 + (efdata2$se[c(7)])^2)
+se3.3 = sqrt(se1.3^2 + se2.3^2)
+t3 = Diff3.3/se3.3
+p.3=pt(-abs(t3),df=n-1)
+LL1.3= Diff1.3 - 1.96*se1.3
+UL1.3=  Diff1.3 + 1.96*se1.3
+LL2.3= Diff2.3 - 1.96*se2.3
+UL2.3=  Diff2.3 + 1.96*se2.3
+LL3.3= Diff3.3 - 1.96*se3.3
+UL3.3=  Diff3.3 + 1.96*se3.3
+Diff1.3
+Diff2.3
+Diff3.3
+se1.3
+se2.3
+se3.3
+t3
+p.3
+LL1.3
+UL1.3
+LL2.3
+UL2.3
+LL3.3
+UL3.3
+```
+
+
+### 4.2.4: Graphing Simple Slopes
+```{r}
+efdata1$DNA<-NA
+efdata1$DNA[efdata1$DNAmAge_COM_0==48.77721]<-"-1 SD"
+efdata1$DNA[efdata1$DNAmAge_COM_0==57.49334]<-"Mean"
+efdata1$DNA[efdata1$DNAmAge_COM_0==66.20947]<-"+1 SD"
+
+efdata1$Timepoint<-NA
+efdata1$Timepoint[efdata1$timefactor==1]<-"Baseline"
+efdata1$Timepoint[efdata1$timefactor==2]<-"First Follow-up"
+efdata1$Timepoint[efdata1$timefactor==3]<-"COVID-19 Study Entry"
+efdata1$Timepoint[efdata1$timefactor==4]<-"COVID-19 Study Exit"
+efdata1$Timepoint<-ordered(efdata1$Timepoint, levels = c("Baseline", "First Follow-up", "COVID-19 Study Entry", "COVID-19 Study Exit"))
+
+ggplot(data=efdata1, aes(x=Timepoint, y=fit, group=DNA)) + geom_line(aes(color=DNA)) + ylim(0,8) + 
+  labs(y= "CESD-10 Score", color="DNA Methylation") + theme_classic() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                                                                              panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+
+
+## 4.3: Hannum Age
+
+
+### 4.3.1: Crude Model
+```{r}
+Hannum_CESD_model_crude<-lmer(CESD_10~Hannum_Age_COM_0*timefactor + (1 + time|ID), REML = TRUE, COVID_Full_Complete)
+summary(Hannum_CESD_model_crude)
+Anova(Hannum_CESD_model_crude, type = "III")#significant Hannum Age x time interaction
+```
+
+
+### 4.3.2: Full Model - Adjusted for age, sex, income, education, living status, alcohol intake, smoking status, chronic conditions, physical activity level, & BMI
+```{r}
+Hannum_CESD_model_full<-lmer(CESD_10~Hannum_Age_COM_0*timefactor + (1 + time|ID) + Sex + Income_Level + Education4 + Living_Status + 
+                               Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0 + Chronic_conditions_0, COVID_Full_Complete)
+summary(Hannum_CESD_model_full)
+Anova(Hannum_CESD_model_full, type = "III")#significant Hannum Age x time interaction
+```
+
+
+### 4.3.3: Simple Slopes Analyses (Contrasts)
+```{r}
+mean(COVID.Final$Hannum_Age_COM_0) #Mean Hannum Age = 63.00277
+mean(COVID.Final$Hannum_Age_COM_0) + 1*sd(COVID.Final$Hannum_Age_COM_0) #High" Hannum Age = 75.07016 
+mean(COVID.Final$Hannum_Age_COM_0) - 1*sd(COVID.Final$Hannum_Age_COM_0) #"Low" Hannum Age = 50.93537
+
+ef2<-effect(term = "Hannum_Age_COM_0*timefactor", xlevels=list(Hannum_Age_COM_0=c(50.93537,63.00277,75.07016)), mod=Hannum_CESD_model_full)
+
+ef2data<-as.data.frame(ef2)
+ef2data2<-ef2data[c(2,3,4,1)]
+
+ef2data2$Hannum<-NA
+ef2data2$Hannum[ef2data2$Hannum_Age_COM_0 == 50.93537] <- "Low"
+ef2data2$Hannum[ef2data2$Hannum_Age_COM_0 == 63.00277] <- "Mean"
+ef2data2$Hannum[ef2data2$Hannum_Age_COM_0 == 75.07016] <- "High"
+
+ef2data2
+
+#Contrast 1: Differences between High and Low Hannum Age from BL to FU1
+Diff4= ef2data2$fit[c(3)] - ef2data2$fit[c(6)] 
+Diff5= ef2data2$fit[c(1)] - ef2data2$fit[c(4)]
+Diff6= Diff4 - Diff5
+se4 = sqrt((ef2data2$se[c(3)])^2 + (ef2data2$se[c(6)])^2)
+se5 = sqrt((ef2data2$se[c(1)])^2 + (ef2data2$se[c(4)])^2)
+se6 = sqrt(se4^2 + se5^2)
+t3 = Diff6/se6
+p3=pt(-abs(t3),df=n-1)
+LL4= Diff4 - 1.96*se4
+UL4=  Diff4 + 1.96*se4
+LL5= Diff5 - 1.96*se5
+UL5=  Diff5 + 1.96*se5
+LL6= Diff6 - 1.96*se6
+UL6=  Diff6 + 1.96*se6
+Diff4
+Diff5
+Diff6
+se4
+se5
+se6
+t3
+p3
+LL4
+UL4
+LL5
+UL5
+LL6
+UL6
+
+#Contrast 2: Differences between High and Low Hannum Age from FU1 to COVID BL
+Diff4.2= ef2data2$fit[c(6)] - ef2data2$fit[c(9)] 
+Diff5.2= ef2data2$fit[c(4)] - ef2data2$fit[c(7)]
+Diff6.2= Diff4.2 - Diff5.2
+se4.2 = sqrt((ef2data2$se[c(6)])^2 + (ef2data2$se[c(9)])^2)
+se5.2 = sqrt((ef2data2$se[c(4)])^2 + (ef2data2$se[c(7)])^2)
+se6.2 = sqrt(se4.2^2 + se5.2^2)
+t4 = Diff6.2/se6.2
+p4=pt(-abs(t4),df=n-1)
+LL4.2= Diff4.2 - 1.96*se4.2
+UL4.2=  Diff4.2 + 1.96*se4.2
+LL5.2= Diff5.2 - 1.96*se5.2
+UL5.2=  Diff5.2 + 1.96*se5.2
+LL6.2= Diff6.2 - 1.96*se6.2
+UL6.2=  Diff6.2 + 1.96*se6.2
+Diff4.2
+Diff5.2
+Diff6.2
+se4.2
+se5.2
+se6.2
+t4
+p4
+LL4.2
+UL4.2
+LL5.2
+UL5.2
+LL6.2
+UL6.2
+
+#Contrast 3: Differences between High and Low Hannum Age from COVID BL to COVID Exit
+Diff4.3= ef2data2$fit[c(9)] - ef2data2$fit[c(12)] 
+Diff5.3= ef2data2$fit[c(7)] - ef2data2$fit[c(10)]
+Diff6.3= Diff4.3 - Diff5.3
+se4.3 = sqrt((ef2data2$se[c(6)])^2 + (ef2data2$se[c(9)])^2)
+se5.3 = sqrt((ef2data2$se[c(4)])^2 + (ef2data2$se[c(7)])^2)
+se6.3 = sqrt(se4.3^2 + se5.3^2)
+t3.3 = Diff6.3/se6.3
+p3.3=pt(-abs(t3),df=n-1)
+LL4.3= Diff4.3 - 1.96*se4.3
+UL4.3=  Diff4.3 + 1.96*se4.3
+LL5.3= Diff5.3 - 1.96*se5.3
+UL5.3=  Diff5.3 + 1.96*se5.3
+LL6.3= Diff6.3 - 1.96*se6.3
+UL6.3=  Diff6.3 + 1.96*se6.3
+Diff4.3
+Diff5.3
+Diff6.3
+se4.3
+se5.3
+se6.3
+t3.3
+p3.3
+LL4.3
+UL4.3
+LL5.3
+UL5.3
+LL6.3
+UL6.3
+```
+
+
+### 4.3.4: Graphing Simple Slopes
+```{r}
+ef2data$Hannum<-NA
+ef2data$Hannum[ef2data$Hannum_Age_COM_0==50.93537]<-"-1 SD"
+ef2data$Hannum[ef2data$Hannum_Age_COM_0==63.00277]<-"Mean"
+ef2data$Hannum[ef2data$Hannum_Age_COM_0==75.07016]<-"+1 SD"
+
+ef2data$Timepoint<-NA
+ef2data$Timepoint[ef2data$timefactor==1]<-"Baseline"
+ef2data$Timepoint[ef2data$timefactor==2]<-"First Follow-up"
+ef2data$Timepoint[ef2data$timefactor==3]<-"COVID-19 Study Entry"
+ef2data$Timepoint[ef2data$timefactor==4]<-"COVID-19 Study Exit"
+ef2data$Timepoint<-ordered(ef2data$Timepoint, levels = c("Baseline", "First Follow-up", "COVID-19 Study Entry", "COVID-19 Study Exit"))
+
+ggplot(data=ef2data, aes(x=Timepoint, y=fit, group=Hannum)) + geom_line(aes(color=Hannum)) + ylim(0,10) + 
+  labs(y= "CESD-10 Score", color="Hannum Age") + theme_classic() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                                                                         panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+
+
+## 4.4: Age Acceleration Difference
+
+
+### 4.4.1: Crude Model
+```{r}
+AgeAccel_CESD_model_crude<-lmer(CESD_10~AgeAccelerationResidual_COM_0*timefactor + (1 + time|ID), REML = TRUE, COVID_Full_Complete)
+summary(AgeAccel_CESD_model_crude)
+Anova(AgeAccel_CESD_model_crude, type = "III")#no significant age accleration residual x time interaction
+```
+
+
+### 4.4.2: Full Model - Adjusted for age, sex, income, education, living status, alcohol intake, smoking status, physical activity level, chronic conditions, & BMI
+```{r}
+AgeAccel_CESD_model_full<-lmer(CESD_10~AgeAccelerationResidual_COM_0*timefactor + (1 + time|ID) + Sex + Income_Level + Education4 + Living_Status + Chronic_conditions_0 +
+                                 Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_Full_Complete)
+summary(AgeAccel_CESD_model_full)
+Anova(AgeAccel_CESD_model_full, type = "III")#no significant age accleration residual x time effect
+```
+
+
+### 4.4.3: Simple Slopes Analyses (Contrasts)
+```{r}
+mean(COVID.Final$AgeAccelerationResidual_COM_0) #Mean DNA Methylation Age = -0.15
+mean(COVID.Final$AgeAccelerationResidual_COM_0) + 1*sd(COVID.Final$AgeAccelerationResidual_COM_0) #High" DNA Methylation Age = 4.286889 
+mean(COVID.Final$AgeAccelerationResidual_COM_0) - 1*sd(COVID.Final$AgeAccelerationResidual_COM_0) #"Low" DNA Methylation Age = -4.589464
+
+
+ef3<-effect(term = "AgeAccelerationResidual_COM_0*timefactor", xlevels=list(AgeAccelerationResidual_COM_0=c(-4.589464,-0.15,4.286889)), mod=AgeAccel_CESD_model_full)
+efdata3<-as.data.frame(ef3)
+efdata3<-efdata3[c(2,3,4,1)]
+
+efdata3$DNA<-NA
+efdata3$DNA[efdata3$AgeAccelerationResidual_COM_0 == -4.589464] <- "Low"
+efdata3$DNA[efdata3$AgeAccelerationResidual_COM_0 == -0.15] <- "Mean"
+efdata3$DNA[efdata3$AgeAccelerationResidual_COM_0 == 4.286889] <- "High"
+
+efdata3
+
+#Contrast 1: Differences between High and Low Age Acceleration Residual from BL to FU1
+Diff7= efdata3$fit[c(3)] - efdata3$fit[c(6)] 
+Diff8= efdata3$fit[c(1)] - efdata3$fit[c(4)]
+Diff9= Diff7 - Diff8
+se7 = sqrt((efdata3$se[c(3)])^2 + (efdata3$se[c(6)])^2)
+se8 = sqrt((efdata3$se[c(1)])^2 + (efdata3$se[c(4)])^2)
+se9 = sqrt(se7^2 + se8^2)
+t9 = Diff9/se9
+p9=pt(-abs(t9),df=n-1)
+LL7= Diff7 - 1.96*se7
+UL7=  Diff7 + 1.96*se7
+LL8= Diff8 - 1.96*se8
+UL8=  Diff8 + 1.96*se8
+LL9= Diff9 - 1.96*se9
+UL9=  Diff9 + 1.96*se9
+Diff7
+Diff8
+Diff9
+se7
+se8
+se9
+t9
+p9
+LL7
+UL7
+LL8
+UL8
+LL9
+UL9
+
+#Contrast 2: Differences between High and Low Age Acceleration Residual from FU1 to COVID BL
+Diff7.2= efdata3$fit[c(6)] - efdata3$fit[c(9)] 
+Diff8.2= efdata3$fit[c(4)] - efdata3$fit[c(7)]
+Diff9.2= Diff7.2 - Diff8.2
+se7.2 = sqrt((efdata3$se[c(6)])^2 + (efdata3$se[c(9)])^2)
+se8.2 = sqrt((efdata3$se[c(4)])^2 + (efdata3$se[c(7)])^2)
+se9.2 = sqrt(se7.2^2 + se8.2^2)
+t9.2 = Diff9.2/se9.2
+p9.2=pt(-abs(t9.2),df=n-1)
+LL7.2= Diff7.2 - 1.96*se7.2
+UL7.2=  Diff7.2 + 1.96*se7.2
+LL8.2= Diff8.2 - 1.96*se8.2
+UL8.2=  Diff8.2 + 1.96*se8.2
+LL9.2= Diff9.2 - 1.96*se9.2
+UL9.2=  Diff9.2 + 1.96*se9.2
+Diff7.2
+Diff8.2
+Diff9.2
+se7.2
+se8.2
+se9.2
+t9.2
+p9.2
+LL7.2
+UL7.2
+LL8.2
+UL8.2
+LL9.2
+UL9.2
+
+#Contrast 3: Differences between High and Low Age Acceleration Residual from COVID BL to COVID Exit
+Diff7.3= efdata3$fit[c(9)] - efdata3$fit[c(12)] 
+Diff8.3= efdata3$fit[c(7)] - efdata3$fit[c(10)]
+Diff9.3= Diff7.3 - Diff8.3
+se7.3 = sqrt((efdata3$se[c(6)])^2 + (efdata3$se[c(9)])^2)
+se8.3 = sqrt((efdata3$se[c(4)])^2 + (efdata3$se[c(7)])^2)
+se9.3 = sqrt(se7.3^2 + se8.3^2)
+t9.3 = Diff9.3/se9.3
+p9.3=pt(-abs(t9.3),df=n-1)
+LL7.3= Diff7.3 - 1.96*se7.3
+UL7.3=  Diff7.3 + 1.96*se7.3
+LL8.3= Diff8.3 - 1.96*se8.3
+UL8.3=  Diff8.3 + 1.96*se8.3
+LL9.3= Diff9.3 - 1.96*se9.3
+UL9.3=  Diff9.3 + 1.96*se9.3
+Diff7.3
+Diff8.3
+Diff9.3
+se7.3
+se8.3
+se9.3
+t9.3
+p9.3
+LL7.3
+UL7.3
+LL8.3
+UL8.3
+LL9.3
+UL9.3
+```
+
+
+
+# Step 5: Predicting Sex Differences in the Association of Epigenetic Age with Depressive Symptoms
+
+
+## 5.1: DNA Methylation Age
+
+
+### 5.1.1: Crude Model
+```{r}
+DNAbySex_CESD_model_crude<-lmer(CESD_10~DNAmAge_COM_0*timefactor*Sex + (1 + time|ID), REML = TRUE, COVID_Full_Complete)
+summary(DNAbySex_CESD_model_crude)
+Anova(DNAbySex_CESD_model_crude, type = "III")#significant sex x time interaction, but not sex x time x DNA methylation interaction
+```
+
+
+### 5.1.2: Full Model - Adjusted for age, income, education, living status, alcohol intake, smoking status, physical activity level, chronic conditions, & BMI
+```{r}
+DNAbySex_CESD_model_full<-lmer(CESD_10~DNAmAge_COM_0*timefactor*Sex + (1 + time|ID) + Income_Level + Education4 + Living_Status + 
+                                 Alcohol + Smoking_Status + Chronic_conditions_0 + PASE_TOTAL_0 + BMI_0, COVID_Full_Complete)
+summary(DNAbySex_CESD_model_full)
+Anova(DNAbySex_CESD_model_full, type = "III")#significant sex x time interaction, but not sex x time x DNA methylation interaction
+```
+
+
+### 5.1.3: Simple Slopes
+```{r}
+describeBy(COVID.Final.BL$DNAmAge_COM_0, COVID.Final.BL$Sex)
+  #Males
+58.77 + 8.96#high= 67.73
+58.77 - 8.96#low= 49.81
+
+n_male<-358
+
+  #Females
+56 + 8.18#high= 64.18
+56 - 8.18#low= 47.82
+n_female<-305
+
+#Only Males Model
+COVID_male_only<-subset(COVID_Full_Complete, Sex == "M")
+DNAmale<-lmer(CESD_10~DNAmAge_COM_0*timefactor + (1 + time|ID) + Income_Level + Education4 + Living_Status + Chronic_conditions_0 + 
+                                 Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_male_only)
+
+efmale1<-effect(term = "DNAmAge_COM_0*timefactor", xlevels=list(DNAmAge_COM_0=c(49.81, 67.73)), mod=DNAmale)
+
+maledata1<-as.data.frame(efmale1)
+maledata1<-maledata1[c(2,3,4,1)]
+
+
+maledata1$DNA<-NA
+maledata1$DNA[maledata1$DNAmAge_COM_0 == 49.81] <- "Low"
+maledata1$DNA[maledata1$DNAmAge_COM_0 == 67.73] <- "High"
+
+maledata1
+
+#Contrast 1: Differences between High and Low DNA Methylation Age from BL to FU1
+Diff10= maledata1$fit[c(2)] - maledata1$fit[c(4)] 
+Diff11= maledata1$fit[c(1)] - maledata1$fit[c(3)]
+Diff12= Diff10 - Diff11
+se10 = sqrt((maledata1$se[c(2)])^2 + (maledata1$se[c(4)])^2)
+se11 = sqrt((maledata1$se[c(1)])^2 + (maledata1$se[c(3)])^2)
+se12 = sqrt(se10^2 + se11^2)
+t12 = Diff12/se12
+p12=pt(-abs(t12),df=n_male-1)
+LL10= Diff10 - 1.96*se10
+UL10=  Diff10 + 1.96*se10
+LL11= Diff11 - 1.96*se11
+UL11=  Diff11 + 1.96*se11
+LL12= Diff12 - 1.96*se12
+UL12=  Diff12 + 1.96*se12
+Diff10
+Diff11
+Diff12
+se10
+se11
+se12
+t12
+p12
+LL10
+UL10
+LL11
+UL11
+LL12
+UL12
+
+#Contrast 2: Differences between High and Low DNA Methylation Age from FU1 to COVID BL
+Diff10.2= maledata1$fit[c(4)] - maledata1$fit[c(6)] 
+Diff11.2= maledata1$fit[c(3)] - maledata1$fit[c(5)]
+Diff12.2= Diff10.2 - Diff11.2
+se10.2 = sqrt((maledata1$se[c(4)])^2 + (maledata1$se[c(6)])^2)
+se11.2 = sqrt((maledata1$se[c(3)])^2 + (maledata1$se[c(5)])^2)
+se12.2 = sqrt(se10.2^2 + se11.2^2)
+t12.2 = Diff12.2/se12.2
+p12.2=pt(-abs(t12.2),df=n_male-1)
+LL10.2= Diff10.2 - 1.96*se10.2
+UL10.2=  Diff10.2 + 1.96*se10.2
+LL11.2= Diff11.2 - 1.96*se11.2
+UL11.2=  Diff11.2 + 1.96*se11.2
+LL12.2= Diff12.2 - 1.96*se12.2
+UL12.2=  Diff12.2 + 1.96*se12.2
+Diff10.2
+Diff11.2
+Diff12.2
+se10.2
+se11.2
+se12.2
+t12.2
+p12.2
+LL10.2
+UL10.2
+LL11.2
+UL11.2
+LL12.2
+UL12.2
+
+#Contrast 3: Differences between High and Low DNA Methylation Age from COVID BL to COVID Exit
+Diff10.3= maledata1$fit[c(6)] - maledata1$fit[c(8)] 
+Diff11.3= maledata1$fit[c(5)] - maledata1$fit[c(7)]
+Diff12.3= Diff10.3 - Diff11.3
+se10.3 = sqrt((maledata1$se[c(6)])^2 + (maledata1$se[c(8)])^2)
+se11.3 = sqrt((maledata1$se[c(5)])^2 + (maledata1$se[c(7)])^2)
+se12.3 = sqrt(se10.3^2 + se11.3^2)
+t12.3 = Diff12.3/se12.3
+p12.3=pt(-abs(t9.3),df=n_male-1)
+LL10.3= Diff10.3 - 1.96*se10.3
+UL10.3=  Diff10.3 + 1.96*se10.3
+LL11.3= Diff11.3 - 1.96*se11.3
+UL11.3=  Diff11.3 + 1.96*se11.3
+LL12.3= Diff12.3 - 1.96*se12.3
+UL12.3=  Diff12.3 + 1.96*se12.3
+Diff10.3
+Diff11.3
+Diff12.3
+se10.3
+se11.3
+se12.3
+t12.3
+p12.3
+LL10.3
+UL10.3
+LL11.3
+UL11.3
+LL12.3
+UL12.3
+
+
+#Only Females Model
+COVID_female_only<-subset(COVID_Full_Complete, Sex == "F")
+DNAfemale<-lmer(CESD_10~DNAmAge_COM_0*timefactor + (1 + time|ID) + Income_Level + Education4 + Living_Status + Chronic_conditions_0 +
+                Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_female_only)
+
+female1<-effect(term = "DNAmAge_COM_0*timefactor", xlevels=list(DNAmAge_COM_0=c(47.82, 64.18)), mod=DNAfemale)
+
+femaledata1<-as.data.frame(female1)
+femaledata1<-femaledata1[c(2,3,4,1)]
+
+
+femaledata1$DNA<-NA
+femaledata1$DNA[femaledata1$DNAmAge_COM_0 == 47.82] <- "Low"
+femaledata1$DNA[femaledata1$DNAmAge_COM_0 == 64.18] <- "High"
+
+femaledata1
+
+#Contrast 1: Differences between High and Low DNA Methylation Age from BL to FU1
+Diff10.4= femaledata1$fit[c(2)] - femaledata1$fit[c(4)] 
+Diff11.4= femaledata1$fit[c(1)] - femaledata1$fit[c(3)]
+Diff12.4= Diff10.4 - Diff11.4
+se10.4 = sqrt((femaledata1$se[c(2)])^2 + (femaledata1$se[c(4)])^2)
+se11.4 = sqrt((femaledata1$se[c(1)])^2 + (femaledata1$se[c(3)])^2)
+se12.4 = sqrt(se10.4^2 + se11.4^2)
+t12.4 = Diff12.4/se12.4
+p12.4=pt(-abs(t12.4),df=n_female-1)
+LL10.4= Diff10.4 - 1.96*se10.4
+UL10.4=  Diff10.4 + 1.96*se10.4
+LL11.4= Diff11.4 - 1.96*se11.4
+UL11.4=  Diff11.4 + 1.96*se11.4
+LL12.4= Diff12.4 - 1.96*se12.4
+UL12.4=  Diff12.4 + 1.96*se12.4
+Diff10.4
+Diff11.4
+Diff12.4
+se10.4
+se11.4
+se12.4
+t12.4
+p12.4
+LL10.4
+UL10.4
+LL11.4
+UL11.4
+LL12.4
+UL12.4
+
+#Contrast 2: Differences between High and Low DNA Methylation Age from FU1 to COVID BL
+Diff10.5= femaledata1$fit[c(4)] - femaledata1$fit[c(6)] 
+Diff11.5= femaledata1$fit[c(3)] - femaledata1$fit[c(5)]
+Diff12.5= Diff10.5 - Diff11.5
+se10.5 = sqrt((femaledata1$se[c(4)])^2 + (femaledata1$se[c(6)])^2)
+se11.5 = sqrt((femaledata1$se[c(3)])^2 + (femaledata1$se[c(5)])^2)
+se12.5 = sqrt(se10.5^2 + se11.5^2)
+t12.5 = Diff12.5/se12.5
+p12.5=pt(-abs(t12.5),df=n_female-1)
+LL10.5= Diff10.5 - 1.96*se10.5
+UL10.5=  Diff10.5 + 1.96*se10.5
+LL11.5= Diff11.5 - 1.96*se11.5
+UL11.5=  Diff11.5 + 1.96*se11.5
+LL12.5= Diff12.5 - 1.96*se12.5
+UL12.5=  Diff12.5 + 1.96*se12.5
+Diff10.5
+Diff11.5
+Diff12.5
+se10.5
+se11.5
+se12.5
+t12.5
+p12.5
+LL10.5
+UL10.5
+LL11.5
+UL11.5
+LL12.5
+UL12.5
+
+#Contrast 3: Differences between High and Low DNA Methylation Age from COVID BL to COVID Exit
+Diff10.6= femaledata1$fit[c(6)] - femaledata1$fit[c(8)] 
+Diff11.6= femaledata1$fit[c(5)] - femaledata1$fit[c(7)]
+Diff12.6= Diff10.6 - Diff11.6
+se10.6 = sqrt((femaledata1$se[c(6)])^2 + (femaledata1$se[c(8)])^2)
+se11.6 = sqrt((femaledata1$se[c(5)])^2 + (femaledata1$se[c(7)])^2)
+se12.6 = sqrt(se10.6^2 + se11.6^2)
+t12.6 = Diff12.6/se12.6
+p12.6=pt(-abs(t12.6),df=n_female-1)
+LL10.6= Diff10.6 - 1.96*se10.6
+UL10.6=  Diff10.6 + 1.96*se10.6
+LL11.6= Diff11.6 - 1.96*se11.6
+UL11.6=  Diff11.6 + 1.96*se11.6
+LL12.6= Diff12.6 - 1.96*se12.6
+UL12.6=  Diff12.6 + 1.96*se12.6
+Diff10.6
+Diff11.6
+Diff12.6
+se10.6
+se11.6
+se12.6
+t12.6
+p12.6
+LL10.6
+UL10.6
+LL11.6
+UL11.6
+LL12.6
+UL12.6
+```
+
+
+## 5.2: Hannum Age 
+
+
+### 5.2.1: Crude Model
+```{r}
+HannumbySex_CESD_model_crude<-lmer(CESD_10~Hannum_Age_COM_0*timefactor*Sex + (1 + time|ID), REML = TRUE, COVID_Full_Complete)
+summary(HannumbySex_CESD_model_crude)
+Anova(HannumbySex_CESD_model_crude, type = "III")#no significant sex interaction effects
+```
+
+
+### 5.2.2: Full Model - Adjusted for age, income, education, living status, alcohol intake, smoking status, physical activity level, chronic conditions, & BMI
+```{r}
+HannumbySex_CESD_model_full<-lmer(CESD_10~Hannum_Age_COM_0*timefactor*Sex + (1 + time|ID) + Income_Level + Education4 + Living_Status + 
+                                    Alcohol + Smoking_Status + PASE_TOTAL_0 + Chronic_conditions_0 + BMI_0, COVID_Full_Complete)
+summary(HannumbySex_CESD_model_full)
+Anova(HannumbySex_CESD_model_full, type = "III")#no significant sex interaction effects
+```
+
+
+### 5.2.3: Simple Slopes
+```{r}
+describeBy(COVID.Final.BL$Hannum_Age_COM_0, COVID.Final.BL$Sex)
+#Males
+64.97 + 11.85#high= 76.82
+64.97 - 11.85#low= 53.12
+
+#Females
+60.69 + 2*11.92#high= 72.61
+60.69 - 2*11.92#low= 48.77
+
+
+#Only Males Model
+DNAmale<-lmer(CESD_10~Hannum_Age_COM_0*timefactor + (1 + time|ID) + Income_Level + Education4 + Living_Status + Chronic_conditions_0 +
+                Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_male_only)
+
+efmale1<-effect(term = "Hannum_Age_COM_0*timefactor", xlevels=list(Hannum_Age_COM_0=c(53.12, 76.82)), mod=DNAmale)
+
+maledata1<-as.data.frame(efmale1)
+maledata1<-maledata1[c(2,3,4,1)]
+
+
+maledata1$DNA<-NA
+maledata1$DNA[maledata1$Hannum_Age_COM_0 == 53.12] <- "Low"
+maledata1$DNA[maledata1$Hannum_Age_COM_0 == 76.82] <- "High"
+
+maledata1
+
+#Contrast 1: Differences between High and Low Hannum Age from BL to FU1
+Diff10= maledata1$fit[c(2)] - maledata1$fit[c(4)] 
+Diff11= maledata1$fit[c(1)] - maledata1$fit[c(3)]
+Diff12= Diff10 - Diff11
+se10 = sqrt((maledata1$se[c(2)])^2 + (maledata1$se[c(4)])^2)
+se11 = sqrt((maledata1$se[c(1)])^2 + (maledata1$se[c(3)])^2)
+se12 = sqrt(se10^2 + se11^2)
+t12 = Diff12/se12
+p12=pt(-abs(t12),df=n_male-1)
+LL10= Diff10 - 1.96*se10
+UL10=  Diff10 + 1.96*se10
+LL11= Diff11 - 1.96*se11
+UL11=  Diff11 + 1.96*se11
+LL12= Diff12 - 1.96*se12
+UL12=  Diff12 + 1.96*se12
+Diff10
+Diff11
+Diff12
+se10
+se11
+se12
+t12
+p12
+LL10
+UL10
+LL11
+UL11
+LL12
+UL12
+
+#Contrast 2: Differences between High and Low Hannum Age from FU1 to COVID BL
+Diff10.2= maledata1$fit[c(4)] - maledata1$fit[c(6)] 
+Diff11.2= maledata1$fit[c(3)] - maledata1$fit[c(5)]
+Diff12.2= Diff10.2 - Diff11.2
+se10.2 = sqrt((maledata1$se[c(4)])^2 + (maledata1$se[c(6)])^2)
+se11.2 = sqrt((maledata1$se[c(3)])^2 + (maledata1$se[c(5)])^2)
+se12.2 = sqrt(se10.2^2 + se11.2^2)
+t12.2 = Diff12.2/se12.2
+p12.2=pt(-abs(t12.2),df=n_male-1)
+LL10.2= Diff10.2 - 1.96*se10.2
+UL10.2=  Diff10.2 + 1.96*se10.2
+LL11.2= Diff11.2 - 1.96*se11.2
+UL11.2=  Diff11.2 + 1.96*se11.2
+LL12.2= Diff12.2 - 1.96*se12.2
+UL12.2=  Diff12.2 + 1.96*se12.2
+Diff10.2
+Diff11.2
+Diff12.2
+se10.2
+se11.2
+se12.2
+t12.2
+p12.2
+LL10.2
+UL10.2
+LL11.2
+UL11.2
+LL12.2
+UL12.2
+
+#Contrast 3: Differences between High and Low Hannum Age from COVID BL to COVID Exit
+Diff10.3= maledata1$fit[c(6)] - maledata1$fit[c(8)] 
+Diff11.3= maledata1$fit[c(5)] - maledata1$fit[c(7)]
+Diff12.3= Diff10.3 - Diff11.3
+se10.3 = sqrt((maledata1$se[c(6)])^2 + (maledata1$se[c(8)])^2)
+se11.3 = sqrt((maledata1$se[c(5)])^2 + (maledata1$se[c(7)])^2)
+se12.3 = sqrt(se10.3^2 + se11.3^2)
+t12.3 = Diff12.3/se12.3
+p12.3=pt(-abs(t9.3),df=n_male-1)
+LL10.3= Diff10.3 - 1.96*se10.3
+UL10.3=  Diff10.3 + 1.96*se10.3
+LL11.3= Diff11.3 - 1.96*se11.3
+UL11.3=  Diff11.3 + 1.96*se11.3
+LL12.3= Diff12.3 - 1.96*se12.3
+UL12.3=  Diff12.3 + 1.96*se12.3
+Diff10.3
+Diff11.3
+Diff12.3
+se10.3
+se11.3
+se12.3
+t12.3
+p12.3
+LL10.3
+UL10.3
+LL11.3
+UL11.3
+LL12.3
+UL12.3
+
+
+#Only Females Model
+DNAfemale<-lmer(CESD_10~Hannum_Age_COM_0*timefactor + (1 + time|ID) + Income_Level + Education4 + Living_Status + Chronic_conditions_0 +
+                  Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_female_only)
+
+female1<-effect(term = "Hannum_Age_COM_0*timefactor", xlevels=list(Hannum_Age_COM_0=c(48.77, 72.61)), mod=DNAfemale)
+
+femaledata1<-as.data.frame(female1)
+femaledata1<-femaledata1[c(2,3,4,1)]
+
+
+femaledata1$DNA<-NA
+femaledata1$DNA[femaledata1$Hannum_Age_COM_0 == 48.77] <- "Low"
+femaledata1$DNA[femaledata1$Hannum_Age_COM_0 == 72.61] <- "High"
+
+femaledata1
+
+#Contrast 1: Differences between High and Low Hannum Age from BL to FU1
+Diff10.4= femaledata1$fit[c(2)] - femaledata1$fit[c(4)] 
+Diff11.4= femaledata1$fit[c(1)] - femaledata1$fit[c(3)]
+Diff12.4= Diff10.4 - Diff11.4
+se10.4 = sqrt((femaledata1$se[c(2)])^2 + (femaledata1$se[c(4)])^2)
+se11.4 = sqrt((femaledata1$se[c(1)])^2 + (femaledata1$se[c(3)])^2)
+se12.4 = sqrt(se10.4^2 + se11.4^2)
+t12.4 = Diff12.4/se12.4
+p12.4=pt(-abs(t12.4),df=n_female-1)
+LL10.4= Diff10.4 - 1.96*se10.4
+UL10.4=  Diff10.4 + 1.96*se10.4
+LL11.4= Diff11.4 - 1.96*se11.4
+UL11.4=  Diff11.4 + 1.96*se11.4
+LL12.4= Diff12.4 - 1.96*se12.4
+UL12.4=  Diff12.4 + 1.96*se12.4
+Diff10.4
+Diff11.4
+Diff12.4
+se10.4
+se11.4
+se12.4
+t12.4
+p12.4
+LL10.4
+UL10.4
+LL11.4
+UL11.4
+LL12.4
+UL12.4
+
+#Contrast 2: Differences between High and Low Hannum Age from FU1 to COVID BL
+Diff10.5= femaledata1$fit[c(4)] - femaledata1$fit[c(6)] 
+Diff11.5= femaledata1$fit[c(3)] - femaledata1$fit[c(5)]
+Diff12.5= Diff10.5 - Diff11.5
+se10.5 = sqrt((femaledata1$se[c(4)])^2 + (femaledata1$se[c(6)])^2)
+se11.5 = sqrt((femaledata1$se[c(3)])^2 + (femaledata1$se[c(5)])^2)
+se12.5 = sqrt(se10.5^2 + se11.5^2)
+t12.5 = Diff12.5/se12.5
+p12.5=pt(-abs(t12.5),df=n_female-1)
+LL10.5= Diff10.5 - 1.96*se10.5
+UL10.5=  Diff10.5 + 1.96*se10.5
+LL11.5= Diff11.5 - 1.96*se11.5
+UL11.5=  Diff11.5 + 1.96*se11.5
+LL12.5= Diff12.5 - 1.96*se12.5
+UL12.5=  Diff12.5 + 1.96*se12.5
+Diff10.5
+Diff11.5
+Diff12.5
+se10.5
+se11.5
+se12.5
+t12.5
+p12.5
+LL10.5
+UL10.5
+LL11.5
+UL11.5
+LL12.5
+UL12.5
+
+#Contrast 3: Differences between High and Low Hannum Age from COVID BL to COVID Exit
+Diff10.6= femaledata1$fit[c(6)] - femaledata1$fit[c(8)] 
+Diff11.6= femaledata1$fit[c(5)] - femaledata1$fit[c(7)]
+Diff12.6= Diff10.6 - Diff11.6
+se10.6 = sqrt((femaledata1$se[c(6)])^2 + (femaledata1$se[c(8)])^2)
+se11.6 = sqrt((femaledata1$se[c(5)])^2 + (femaledata1$se[c(7)])^2)
+se12.6 = sqrt(se10.6^2 + se11.6^2)
+t12.6 = Diff12.6/se12.6
+p12.6=pt(-abs(t12.6),df=n_female-1)
+LL10.6= Diff10.6 - 1.96*se10.6
+UL10.6=  Diff10.6 + 1.96*se10.6
+LL11.6= Diff11.6 - 1.96*se11.6
+UL11.6=  Diff11.6 + 1.96*se11.6
+LL12.6= Diff12.6 - 1.96*se12.6
+UL12.6=  Diff12.6 + 1.96*se12.6
+Diff10.6
+Diff11.6
+Diff12.6
+se10.6
+se11.6
+se12.6
+t12.6
+p12.6
+LL10.6
+UL10.6
+LL11.6
+UL11.6
+LL12.6
+UL12.6
+```
+
+
+
+## 5.3: Age Acceleration Difference
+
+
+### 5.3.1: Crude Model
+```{r}
+AgeAccelbySex_CESD_model_crude<-lmer(CESD_10~AgeAccelerationResidual_COM_0*timefactor*Sex + (1 + time|ID), REML = TRUE, COVID_Full_Complete)
+summary(AgeAccelbySex_CESD_model_crude)
+Anova(AgeAccelbySex_CESD_model_crude, type = "III")#significant sex by time effect, but no sex by time by age acceleration difference interaction
+```
+
+
+### 5.3.2: Full Model - Adjusted for age, sex, income, education, living status, alcohol intake, smoking status, physical activity level,chronic conditions, & BMI
+```{r}
+AgeAccelbySex_CESD_model_full<-lmer(CESD_10~AgeAccelerationResidual_COM_0*timefactor*Sex + (1 + time|ID) + Income_Level + Education4 + Living_Status + Chronic_conditions_0 +
+                                      Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_Full_Complete)
+summary(AgeAccelbySex_CESD_model_full)
+Anova(AgeAccelbySex_CESD_model_full, type = "III")#no significant sex interaction effects
+```
+
+
+### 5.3.3: Simple Slopes
+```{r}
+describeBy(COVID.Final.BL$AgeAccelerationResidual_COM_0, COVID.Final.BL$Sex)
+#Males
+0.81 + 4.6#high= 5.41
+0.81 - 4.6#low= -3.79
+
+#Females
+-1.27 + 3.96#high= 2.69
+-1.27 - 3.96#low= -5.23
+
+
+#Only Males Model
+DNAmale<-lmer(CESD_10~AgeAccelerationResidual_COM_0*timefactor + (1 + time|ID) + Income_Level + Education4 + Living_Status + Chronic_conditions_0 +
+                Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_male_only)
+
+efmale1<-effect(term = "AgeAccelerationResidual_COM_0*timefactor", xlevels=list(AgeAccelerationResidual_COM_0=c(-3.79, 5.41)), mod=DNAmale)
+
+maledata1<-as.data.frame(efmale1)
+maledata1<-maledata1[c(2,3,4,1)]
+
+
+maledata1$DNA<-NA
+maledata1$DNA[maledata1$AgeAccelerationResidual_COM_0 == -3.79] <- "Low"
+maledata1$DNA[maledata1$AgeAccelerationResidual_COM_0 == 5.41] <- "High"
+
+maledata1
+
+#Contrast 1: Differences between High and Low Age Acceleration Residual from BL to FU1
+Diff10= maledata1$fit[c(2)] - maledata1$fit[c(4)] 
+Diff11= maledata1$fit[c(1)] - maledata1$fit[c(3)]
+Diff12= Diff10 - Diff11
+se10 = sqrt((maledata1$se[c(2)])^2 + (maledata1$se[c(4)])^2)
+se11 = sqrt((maledata1$se[c(1)])^2 + (maledata1$se[c(3)])^2)
+se12 = sqrt(se10^2 + se11^2)
+t12 = Diff12/se12
+p12=pt(-abs(t12),df=n_male-1)
+LL10= Diff10 - 1.96*se10
+UL10=  Diff10 + 1.96*se10
+LL11= Diff11 - 1.96*se11
+UL11=  Diff11 + 1.96*se11
+LL12= Diff12 - 1.96*se12
+UL12=  Diff12 + 1.96*se12
+Diff10
+Diff11
+Diff12
+se10
+se11
+se12
+t12
+p12
+LL10
+UL10
+LL11
+UL11
+LL12
+UL12
+
+#Contrast 2: Differences between High and Low Age Acceleration Residual from FU1 to COVID BL
+Diff10.2= maledata1$fit[c(4)] - maledata1$fit[c(6)] 
+Diff11.2= maledata1$fit[c(3)] - maledata1$fit[c(5)]
+Diff12.2= Diff10.2 - Diff11.2
+se10.2 = sqrt((maledata1$se[c(4)])^2 + (maledata1$se[c(6)])^2)
+se11.2 = sqrt((maledata1$se[c(3)])^2 + (maledata1$se[c(5)])^2)
+se12.2 = sqrt(se10.2^2 + se11.2^2)
+t12.2 = Diff12.2/se12.2
+p12.2=pt(-abs(t12.2),df=n_male-1)
+LL10.2= Diff10.2 - 1.96*se10.2
+UL10.2=  Diff10.2 + 1.96*se10.2
+LL11.2= Diff11.2 - 1.96*se11.2
+UL11.2=  Diff11.2 + 1.96*se11.2
+LL12.2= Diff12.2 - 1.96*se12.2
+UL12.2=  Diff12.2 + 1.96*se12.2
+Diff10.2
+Diff11.2
+Diff12.2
+se10.2
+se11.2
+se12.2
+t12.2
+p12.2
+LL10.2
+UL10.2
+LL11.2
+UL11.2
+LL12.2
+UL12.2
+
+#Contrast 3: Differences between High and Low Age Acceleration Residual from COVID BL to COVID Exit
+Diff10.3= maledata1$fit[c(6)] - maledata1$fit[c(8)] 
+Diff11.3= maledata1$fit[c(5)] - maledata1$fit[c(7)]
+Diff12.3= Diff10.3 - Diff11.3
+se10.3 = sqrt((maledata1$se[c(6)])^2 + (maledata1$se[c(8)])^2)
+se11.3 = sqrt((maledata1$se[c(5)])^2 + (maledata1$se[c(7)])^2)
+se12.3 = sqrt(se10.3^2 + se11.3^2)
+t12.3 = Diff12.3/se12.3
+p12.3=pt(-abs(t9.3),df=n_male-1)
+LL10.3= Diff10.3 - 1.96*se10.3
+UL10.3=  Diff10.3 + 1.96*se10.3
+LL11.3= Diff11.3 - 1.96*se11.3
+UL11.3=  Diff11.3 + 1.96*se11.3
+LL12.3= Diff12.3 - 1.96*se12.3
+UL12.3=  Diff12.3 + 1.96*se12.3
+Diff10.3
+Diff11.3
+Diff12.3
+se10.3
+se11.3
+se12.3
+t12.3
+p12.3
+LL10.3
+UL10.3
+LL11.3
+UL11.3
+LL12.3
+UL12.3
+
+
+#Only Females Model
+DNAfemale<-lmer(CESD_10~AgeAccelerationResidual_COM_0*timefactor + (1 + time|ID) + Income_Level + Education4 + Living_Status + Chronic_conditions_0 +
+                  Alcohol + Smoking_Status + PASE_TOTAL_0 + BMI_0, COVID_female_only)
+
+female1<-effect(term = "AgeAccelerationResidual_COM_0*timefactor", xlevels=list(AgeAccelerationResidual_COM_0=c(-5.23, 2.69)), mod=DNAfemale)
+
+femaledata1<-as.data.frame(female1)
+femaledata1<-femaledata1[c(2,3,4,1)]
+
+
+femaledata1$DNA<-NA
+femaledata1$DNA[femaledata1$AgeAccelerationResidual_COM_0 == -5.23] <- "Low"
+femaledata1$DNA[femaledata1$AgeAccelerationResidual_COM_0 == 2.69] <- "High"
+
+femaledata1
+
+#Contrast 1: Differences between High and Low Age Acceleration Residual from BL to FU1
+Diff10.4= femaledata1$fit[c(2)] - femaledata1$fit[c(4)] 
+Diff11.4= femaledata1$fit[c(1)] - femaledata1$fit[c(3)]
+Diff12.4= Diff10.4 - Diff11.4
+se10.4 = sqrt((femaledata1$se[c(2)])^2 + (femaledata1$se[c(4)])^2)
+se11.4 = sqrt((femaledata1$se[c(1)])^2 + (femaledata1$se[c(3)])^2)
+se12.4 = sqrt(se10.4^2 + se11.4^2)
+t12.4 = Diff12.4/se12.4
+p12.4=pt(-abs(t12.4),df=n_female-1)
+LL10.4= Diff10.4 - 1.96*se10.4
+UL10.4=  Diff10.4 + 1.96*se10.4
+LL11.4= Diff11.4 - 1.96*se11.4
+UL11.4=  Diff11.4 + 1.96*se11.4
+LL12.4= Diff12.4 - 1.96*se12.4
+UL12.4=  Diff12.4 + 1.96*se12.4
+Diff10.4
+Diff11.4
+Diff12.4
+se10.4
+se11.4
+se12.4
+t12.4
+p12.4
+LL10.4
+UL10.4
+LL11.4
+UL11.4
+LL12.4
+UL12.4
+
+#Contrast 2: Differences between High and Low Age Acceleration Residual from FU1 to COVID BL
+Diff10.5= femaledata1$fit[c(4)] - femaledata1$fit[c(6)] 
+Diff11.5= femaledata1$fit[c(3)] - femaledata1$fit[c(5)]
+Diff12.5= Diff10.5 - Diff11.5
+se10.5 = sqrt((femaledata1$se[c(4)])^2 + (femaledata1$se[c(6)])^2)
+se11.5 = sqrt((femaledata1$se[c(3)])^2 + (femaledata1$se[c(5)])^2)
+se12.5 = sqrt(se10.5^2 + se11.5^2)
+t12.5 = Diff12.5/se12.5
+p12.5=pt(-abs(t12.5),df=n_female-1)
+LL10.5= Diff10.5 - 1.96*se10.5
+UL10.5=  Diff10.5 + 1.96*se10.5
+LL11.5= Diff11.5 - 1.96*se11.5
+UL11.5=  Diff11.5 + 1.96*se11.5
+LL12.5= Diff12.5 - 1.96*se12.5
+UL12.5=  Diff12.5 + 1.96*se12.5
+Diff10.5
+Diff11.5
+Diff12.5
+se10.5
+se11.5
+se12.5
+t12.5
+p12.5
+LL10.5
+UL10.5
+LL11.5
+UL11.5
+LL12.5
+UL12.5
+
+#Contrast 3: Differences between High and Low Age Acceleration Residual from COVID BL to COVID Exit
+Diff10.6= femaledata1$fit[c(6)] - femaledata1$fit[c(8)] 
+Diff11.6= femaledata1$fit[c(5)] - femaledata1$fit[c(7)]
+Diff12.6= Diff10.6 - Diff11.6
+se10.6 = sqrt((femaledata1$se[c(6)])^2 + (femaledata1$se[c(8)])^2)
+se11.6 = sqrt((femaledata1$se[c(5)])^2 + (femaledata1$se[c(7)])^2)
+se12.6 = sqrt(se10.6^2 + se11.6^2)
+t12.6 = Diff12.6/se12.6
+p12.6=pt(-abs(t12.6),df=n_female-1)
+LL10.6= Diff10.6 - 1.96*se10.6
+UL10.6=  Diff10.6 + 1.96*se10.6
+LL11.6= Diff11.6 - 1.96*se11.6
+UL11.6=  Diff11.6 + 1.96*se11.6
+LL12.6= Diff12.6 - 1.96*se12.6
+UL12.6=  Diff12.6 + 1.96*se12.6
+Diff10.6
+Diff11.6
+Diff12.6
+se10.6
+se11.6
+se12.6
+t12.6
+p12.6
+LL10.6
+UL10.6
+LL11.6
+UL11.6
+LL12.6
+UL12.6
