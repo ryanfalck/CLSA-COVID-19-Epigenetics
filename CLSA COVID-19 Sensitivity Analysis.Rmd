@@ -1,0 +1,117 @@
+---
+title: "CLSA COVID Epigenetic Sensitivity Analysis"
+author: "RSF"
+date: "2022-07-15"
+output: 
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Note: These sensitivity analyses were conducted based off of code written by Ms. Amy Inkster. 
+
+#1: Set-up
+
+This section creates a table called ProbeInfo that houses information on all the CpGs probed by the EPIC array, including what chromosome/gene/genic region they are part of, I use this later to pull out probes on the X and Y for sex checks. 
+```{r}
+library(dplyr)
+ProbeInfo <- as.data.frame(IlluminaHumanMethylationEPICanno.ilm10b4.hg19::Locations)
+ProbeInfo$probeID <- rownames(ProbeInfo)
+chrXprobes <- ProbeInfo %>% filter(chr %in% "chrX")
+chrYprobes <- ProbeInfo %>% filter(chr %in% "chrY")
+autoProbes <- ProbeInfo %>% filter(!(chr %in% c("chrX", "chrY"))) 
+chrXYprobes <- ProbeInfo %>% filter(chr %in% c("chrX", "chrY"))
+```
+
+Read in the RAW beta values matrix from the CLSA. Should have probes as rows, samples as columns. Also read in the metadata that contains sample ID labels, and sex labels. The rest of this code assumes the betas object is probes (rows) x samples (columns).
+
+```{r}
+setwd("~/Desktop/UBC-Postdoctoral Fellowship/CLSA - Covid Analyses/epigenetics_clsa_s1478")
+
+pDat <- read.csv("CLSA_metadata_FINA_Apr_2021-deidentified.csv")          ## change to reflect local path (if 1446 objects, then do not need the betas_filt file; if not, then load betas_filt)
+
+betas_filt <- read.csv("CLSA.RAW_BETAS_Transposed_Apr2021.csv")         ## change to reflect local path
+```
+
+Install packages necessary for sensitivity analysis
+```{r}
+if(!"BiocManager" %in% installed.packages()) {
+  install.packages("BiocManager")}
+if(!"minfi" %in% installed.packages()) {
+  BiocManager::install("minfi")}
+if(!"IlluminaHumanMethylationEPICmanifest" %in% installed.packages()) {
+  BiocManager::install("IlluminaHumanMethylationEPICmanifest")}
+if(!"IlluminaHumanMethylationEPICanno.ilm10b4.hg19" %in% installed.packages()) {
+  BiocManager::install("IlluminaHumanMethylationEPICanno.ilm10b4.hg19")}
+if(!"tidyverse" %in% installed.packages()) {
+  BiocManager::install("tidyverse")}
+if(!"remotes" %in% installed.packages()) {
+  install.packages("remotes")}
+if(!"ewastools" %in% installed.packages()) {
+  remotes::install_github("hhhh5/ewastools")}
+
+library(minfi)
+library(ewastools)
+library(tidyverse)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+```
+
+#2: Identity checks
+There are 56 SNP genotyping probes included on the EPIC array that are intended to clarify sample identity and possible contamination/mixups. The probes that measure DNAme on the array are named starting with "cg" or "ch" prefixes, while the SNP genotyping probes are named with strings that begin with "rs". Pull these probes and cluster on them.
+
+```{r}
+rs <- betas_filt[ , grepl("rs", names(betas_filt))]
+dim(rs)
+head(rs)
+
+genotypes <- call_genotypes(t(rs))
+
+check_snp_agreement(genotypes, rownames(rs), rownames(rs)) # should be NULL (and is Null)
+```
+
+#3: Sex checks
+Now, check that reported sex in metadata table matches data itself from the sex chromosomes. Achieve this by clustering on the probes from both the X and Y chromosome, samples should separate by sex.
+
+First, we pull beta values associated with the X and Y chromosome
+```{r}
+betasxy <- betas_filt[,colnames(betas_filt) %in% chrXYprobes$probeID]
+```
+
+Next, run pca on these probes
+```{r}
+sum(is.na(betasxy))
+
+test <- na.omit(t(betasxy)) # drop NAs
+
+pc_obj <- prcomp(t(test)) # run pca
+pc_matrix <- pc_obj$x # extract PC scores
+```
+
+
+We then create a dataframe where all participants with genotypic data are only included, and then organize them by epigenetic testing number
+```{r}
+setwd("~/Desktop/UBC-Postdoctoral Fellowship/CLSA - Covid Analyses/21CON001_McMasterU_PRaina_Baseline")
+Genedata<-read.csv("21CON001_McMasterU_PRaina_CoP5_2_Baseline.csv")#Processed Baseline + Follow-up 1 + COVID Questionnaire
+Genedata<-subset(Genedata, !is.na(AgeAccelerationDifference_COM)) #Subset to only participants with genetic data
+Genedata<-Genedata[c(25,2379)]
+
+library(dplyr)
+Genedata<-arrange(Genedata, ADM_EPIGEN2_COM)
+```
+
+
+Finally, we plot PC1 and PC2 and color by the reported sex. There should be a clear separation between PC1 and PC2, wherein all males are located within one PC and all females are located within the other. In the event that some males were incorrectly located on the "wrong" PC (or vice-versa), then these individuals would need to be removed from the anlaysis.
+```{r}
+pc_matrix %>% 
+  as.data.frame() %>%
+  ggplot(aes(x=PC1, y=PC2, color = Genedata$SEX_ASK_COM)) +  ## change to column of pDat that contains sex info if not called "Sex"
+  geom_point() +
+  ggtitle("PCA on XY Probes") +
+  theme_light() +
+  theme(legend.position = "bottom", plot.title = element_text(hjust=0.5)) +
+  coord_equal(ratio=1)
+```
